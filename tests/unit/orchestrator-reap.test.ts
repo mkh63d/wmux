@@ -8,6 +8,8 @@ import { createWmuxStub, removeWmuxStub, type WmuxStub } from '../helpers/wmux-s
 
 const SCRIPTS = path.resolve(__dirname, '../../resources/wmux-orchestrator/scripts');
 const REAP = path.join(SCRIPTS, 'reap-wave.sh');
+const SPAWN = path.join(SCRIPTS, 'spawn-agents.sh');
+const CLEANUP = path.join(SCRIPTS, 'cleanup.sh');
 const JSON_TOOL = path.join(SCRIPTS, 'json-tool.js');
 
 const reapPath = forBash(REAP);
@@ -24,6 +26,7 @@ interface AgentFixture {
   surfaceId?: string;
   paneId?: string;
   reapedAt?: string;
+  label?: string;
 }
 
 function writeState(waves: AgentFixture[][], extra: Record<string, unknown> = {}): void {
@@ -283,5 +286,160 @@ describe.skipIf(!hasBash())('json-tool reaping queries', { timeout: SLOW }, () =
     const out = tool('query', path.join(orchDir, 'state.json'), 'reap-candidates', 'all', 'own');
 
     expect(out.split('\n').filter(Boolean)).toEqual(['a2\t-\ts2\t-', 'a1\tg1\town\tp1']);
+  });
+});
+
+const spawnPath = forBash(SPAWN);
+const cleanupPath = forBash(CLEANUP);
+const canSpawn = hasBash() && bashExists(spawnPath) && bashExists(cleanupPath);
+
+const LAYOUT_OK = JSON.stringify({
+  newPaneIds: ['pane-w1', 'pane-w2'],
+  newPanes: [
+    { paneId: 'pane-w1', surfaceId: 'surf-w1' },
+    { paneId: 'pane-w2', surfaceId: 'surf-w2' },
+  ],
+  anchorPaneId: 'pane-anchor',
+  cols: 1,
+  rows: 2,
+});
+const SPAWN_OK = JSON.stringify({ agentId: 'wagent-1', surfaceId: 'surf-new' });
+
+const pendingAgent = (id: string): AgentFixture => ({ id, label: `label-${id}`, status: 'pending' });
+
+function spawn(wave: number, env: Record<string, string> = {}) {
+  return stub.bash(`bash "${spawnPath}" "${forBash(orchDir)}" ${wave}`, env);
+}
+
+describe.skipIf(!canSpawn)('spawn-agents.sh', { timeout: SLOW }, () => {
+  it('lays the wave out with `layout agents` and records what reaping needs', () => {
+    writeState([[pendingAgent('a1'), pendingAgent('a2')]], { coordinatorPaneId: undefined });
+    stub.reply('layout agents', { stdout: LAYOUT_OK });
+    stub.reply('agent spawn', { stdout: SPAWN_OK });
+    stub.assertReachable();
+
+    const r = spawn(0);
+
+    expect(r.status).toBe(0);
+    const calls = stub.calls();
+    expect(calls[0]).toBe('ping');
+    expect(calls[1]).toBe('layout agents --count 2 --type terminal');
+    expect(calls.filter((c) => c.startsWith('agent spawn'))).toHaveLength(2);
+    expect(calls.some((c) => c.startsWith('layout grid'))).toBe(false);
+    expect(calls.some((c) => c.includes('--anchor-pane'))).toBe(false);
+    expect(readState().coordinatorPaneId).toBe('pane-anchor');
+    expect(agentOf(0, 0)).toMatchObject({ wmuxAgentId: 'wagent-1', paneId: 'pane-w1', surfaceId: 'surf-new', status: 'running' });
+    expect(agentOf(0, 1)).toMatchObject({ wmuxAgentId: 'wagent-1', paneId: 'pane-w2' });
+    expect(calls.filter((c) => c.startsWith('agent spawn'))[1]).toContain('--pane pane-w2');
+  });
+
+  it('keeps a coordinatorPaneId that is already recorded', () => {
+    writeState([[pendingAgent('a1')]], { coordinatorPaneId: 'pane-first' });
+    stub.reply('layout agents', { stdout: LAYOUT_OK });
+    stub.reply('agent spawn', { stdout: SPAWN_OK });
+    stub.assertReachable();
+
+    spawn(0);
+
+    expect(readState().coordinatorPaneId).toBe('pane-first');
+  });
+
+  const OLD_WMUX: [string, string][] = [
+    ['current CLI', 'Unknown layout subcommand: agents'],
+    ['older CLI', 'Unknown layout command: agents'],
+    ['new CLI, old app', 'Method not found: layout.agents'],
+  ];
+  it.each(OLD_WMUX)('falls back to `layout grid` on %s', (_name, message) => {
+    writeState([[pendingAgent('a1'), pendingAgent('a2')]], { coordinatorPaneId: undefined });
+    stub.reply('layout agents', { exit: 1, stderr: message });
+    stub.reply('layout grid', { stdout: JSON.stringify({ newPaneIds: ['pane-g1', 'pane-g2'] }) });
+    stub.reply('agent spawn', { stdout: SPAWN_OK });
+    stub.assertReachable();
+
+    const r = spawn(0);
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('falling back');
+    const calls = stub.calls();
+    expect(calls).toContain('layout agents --count 2 --type terminal');
+    expect(calls).toContain('layout grid --count 3 --type terminal');
+    expect(agentOf(0, 0)).toMatchObject({ paneId: 'pane-g1', wmuxAgentId: 'wagent-1' });
+    expect(readState().coordinatorPaneId).toBeUndefined();
+  });
+
+  it('exits 1 without touching `layout grid` when the anchor does not resolve', () => {
+    writeState([[pendingAgent('a1')]]);
+    stub.reply('layout agents', { exit: 1, stderr: 'No active workspace or invalid anchor' });
+    stub.reply('layout grid', { stdout: JSON.stringify({ newPaneIds: ['pane-g1'] }) });
+    stub.assertReachable();
+
+    const r = spawn(0);
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('invalid anchor');
+    const calls = stub.calls();
+    expect(calls).toContain('layout agents --count 1 --type terminal');
+    expect(calls.some((c) => c.startsWith('layout grid'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('agent spawn'))).toBe(false);
+  });
+
+  it('reaps waves 0..N-1 before laying out wave N', () => {
+    writeState([
+      [{ id: 'a1', wmuxAgentId: 'g1', surfaceId: 's1', paneId: 'p1' }],
+      [{ id: 'b1', wmuxAgentId: 'g2', surfaceId: 's2', paneId: 'p2' }],
+      [pendingAgent('c1')],
+    ]);
+    stub.reply('layout agents', { stdout: LAYOUT_OK });
+    stub.reply('agent spawn', { stdout: SPAWN_OK });
+    stub.assertReachable();
+
+    const r = spawn(2);
+
+    expect(r.status).toBe(0);
+    const calls = stub.calls();
+    const layoutAt = calls.indexOf('layout agents --count 1 --type terminal');
+    expect(layoutAt).toBeGreaterThan(-1);
+    expect(calls.slice(0, layoutAt)).toEqual(
+      expect.arrayContaining(['agent kill g1', 'close-surface s1', 'agent kill g2', 'close-surface s2']),
+    );
+    expect(calls.slice(layoutAt).some((c) => c.startsWith('close-surface'))).toBe(false);
+    expect(agentOf(0).reapedAt).toBeDefined();
+    expect(agentOf(1).reapedAt).toBeDefined();
+    expect(agentOf(2).reapedAt).toBeUndefined();
+  });
+
+  it('reaps nothing for wave 0', () => {
+    writeState([[pendingAgent('a1')]]);
+    stub.reply('layout agents', { stdout: LAYOUT_OK });
+    stub.reply('agent spawn', { stdout: SPAWN_OK });
+    stub.assertReachable();
+
+    spawn(0);
+
+    expect(stub.calls().some((c) => c.startsWith('close-surface') || c.startsWith('agent kill'))).toBe(false);
+  });
+});
+
+describe.skipIf(!canSpawn)('cleanup.sh', { timeout: SLOW }, () => {
+  it('reaps the run before deleting its directory', () => {
+    writeState([[{ id: 'a1', wmuxAgentId: 'g1', surfaceId: 's1', paneId: 'p1' }]]);
+    stub.assertReachable();
+
+    const r = stub.bash(`bash "${cleanupPath}" "${forBash(orchDir)}"`);
+
+    expect(r.status).toBe(0);
+    expect(stub.calls()).toEqual(['ping', 'agent kill g1', 'close-surface s1']);
+    expect(fs.existsSync(orchDir)).toBe(false);
+  });
+
+  it('just deletes the directory when there is no state.json', () => {
+    fs.writeFileSync(path.join(orchDir, 'junk.txt'), 'x');
+    stub.assertReachable();
+
+    const r = stub.bash(`bash "${cleanupPath}" "${forBash(orchDir)}"`);
+
+    expect(r.status).toBe(0);
+    expect(stub.calls()).toEqual([]);
+    expect(fs.existsSync(orchDir)).toBe(false);
   });
 });

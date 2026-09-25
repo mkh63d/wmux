@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # spawn-agents.sh <orch-dir> <wave-index>
-# Creates a balanced grid of wmux panes (orchestrator + N agents) and spawns
-# one Claude Code agent per new pane. Uses `wmux layout grid` so all panes are
-# laid out in one atomic split-tree mutation instead of cascading splits.
+# Splits the coordinator's own pane into [coordinator | worker grid] with
+# `wmux layout agents` (one atomic split-tree mutation) and spawns one Claude
+# Code agent per worker pane. Agents of earlier waves are reaped first, so
+# their panes are gone before the new grid is laid out.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/orchestration-state.sh"
@@ -44,7 +45,7 @@ fi
 CWD=$(read_state "$ORCH_DIR" '.cwd')
 [ -z "$CWD" ] || [ "$CWD" = "null" ] && CWD="$(pwd)"
 
-# Count agents in this wave so we know how many new panes to request.
+# Count agents in this wave so we know how many worker cells to request.
 AGENT_COUNT=$(node "$JSON_TOOL" query "$ORCH_DIR/state.json" wave-agents-each "$WAVE_IDX" | grep -c . || true)
 AGENT_COUNT=${AGENT_COUNT:-0}
 
@@ -53,17 +54,52 @@ if [ "$AGENT_COUNT" -eq 0 ]; then
   exit 0
 fi
 
-# Request a balanced grid: 1 cell for the orchestrator pane + 1 cell per agent.
-# The orchestrator pane stays as top-left; N new panes are returned in newPaneIds
-# in row-major order. The CLI picks up $WMUX_SURFACE_ID as anchor automatically.
-GRID_COUNT=$((AGENT_COUNT + 1))
-echo "Creating $GRID_COUNT-cell grid layout (1 orchestrator + $AGENT_COUNT agents)"
+# Earlier waves are finished by the time this one starts. Reaping is
+# idempotent, so a wave the model already reaped costs one ping.
+REAP_IDX=0
+while [ "$REAP_IDX" -lt "$WAVE_IDX" ]; do
+  bash "$SCRIPT_DIR/reap-wave.sh" "$ORCH_DIR" "$REAP_IDX" </dev/null
+  REAP_IDX=$((REAP_IDX + 1))
+done
 
-LAYOUT_RESULT=$(wmux layout grid --count "$GRID_COUNT" --type terminal 2>&1)
+# Only "this wmux has no layout agents" may fall back to `layout grid`. Any
+# other failure (an unresolvable anchor above all) must stop the spawn: a grid
+# built around the wrong anchor would fold unrelated panes into the coordinator.
+layout_agents_unsupported() {
+  printf '%s' "$1" | grep -Eq 'Unknown layout (sub)?command: agents|(Method not found|Unknown method)[: ]+layout\.agents|-32601.*layout\.agents'
+}
+
+# --count is worker CELLS. The anchor is $WMUX_SURFACE_ID, which the CLI picks
+# up itself; a pane id is deliberately not passed, since a stale one is a miss,
+# not a fallback.
+echo "Laying out $AGENT_COUNT worker cell(s) beside the coordinator"
+
+ANCHOR_PANE=""
+LAYOUT_RESULT=$(wmux layout agents --count "$AGENT_COUNT" --type terminal 2>&1)
 FIRST_PANE=$(parse_json "$LAYOUT_RESULT" '.newPaneIds[0]')
-if [ -z "$FIRST_PANE" ] || [ "$FIRST_PANE" = "null" ]; then
-  echo "ERROR: wmux layout grid failed: $LAYOUT_RESULT" >&2
+if [ -n "$FIRST_PANE" ] && [ "$FIRST_PANE" != "null" ]; then
+  ANCHOR_PANE=$(parse_json "$LAYOUT_RESULT" '.anchorPaneId')
+elif layout_agents_unsupported "$LAYOUT_RESULT"; then
+  echo "WARNING: wmux has no 'layout agents'; falling back to 'layout grid'" >&2
+  # 1 cell for the coordinator + 1 per agent. The fallback does not learn the
+  # coordinator's pane, so it leaves coordinatorPaneId unset.
+  GRID_COUNT=$((AGENT_COUNT + 1))
+  LAYOUT_RESULT=$(wmux layout grid --count "$GRID_COUNT" --type terminal 2>&1)
+  FIRST_PANE=$(parse_json "$LAYOUT_RESULT" '.newPaneIds[0]')
+  if [ -z "$FIRST_PANE" ] || [ "$FIRST_PANE" = "null" ]; then
+    echo "ERROR: wmux layout grid failed: $LAYOUT_RESULT" >&2
+    exit 1
+  fi
+else
+  echo "ERROR: wmux layout agents failed: $LAYOUT_RESULT" >&2
   exit 1
+fi
+
+if [ -n "$ANCHOR_PANE" ] && [ "$ANCHOR_PANE" != "null" ]; then
+  CURRENT_COORD=$(read_state "$ORCH_DIR" '.coordinatorPaneId')
+  if [ -z "$CURRENT_COORD" ] || [ "$CURRENT_COORD" = "null" ]; then
+    update_state "$ORCH_DIR" .coordinatorPaneId "$ANCHOR_PANE"
+  fi
 fi
 
 # Spawn each agent into its assigned new pane.
@@ -106,6 +142,7 @@ while IFS= read -r agent; do
 
   NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   update_agent "$ORCH_DIR" "$AGENT_ID" \
+    "wmuxAgentId=$SPAWNED_AGENT_ID" \
     "paneId=$PANE_ID" \
     "surfaceId=$SPAWNED_SURFACE_ID" \
     "status=running" \
