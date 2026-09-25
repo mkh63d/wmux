@@ -128,6 +128,25 @@ function findAgent(data, agentId) {
   return null;
 }
 
+/**
+ * Cell index per agent of one wave: agents sharing a trimmed, non-blank string
+ * `group` share a cell; every other agent (missing/null/non-string/blank group,
+ * or a non-object entry) gets its own. Cells are numbered by first appearance.
+ * The sidebar's groupWaveAgents applies the same rule; a parity test pins both.
+ */
+function cellsForAgents(agents) {
+  const list = Array.isArray(agents) ? agents : [];
+  const byName = new Map();
+  let next = 0;
+  return list.map(agent => {
+    const raw = agent && typeof agent === 'object' ? agent.group : undefined;
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (name === '') return next++;
+    if (!byName.has(name)) byName.set(name, next++);
+    return byName.get(name);
+  });
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 function cmdGet(file, dotPath) {
@@ -286,6 +305,29 @@ function cmdQuery(file, queryName, ...args) {
           process.stdout.write(JSON.stringify(agent) + '\n');
         }
       }
+      break;
+    }
+
+    case 'wave-cells-each': {
+      // Each agent as a compact JSON line plus its 0-based "_cell" (agents that
+      // share a group share a cell). A non-object entry has no fields to carry
+      // it, so it prints as {"_cell":n} to keep the line count equal to agents[].
+      const waveIdx = parseInt(args[0], 10);
+      const agents = data.waves && data.waves[waveIdx] && data.waves[waveIdx].agents;
+      if (!Array.isArray(agents)) break;
+      const cells = cellsForAgents(agents);
+      agents.forEach((agent, i) => {
+        const fields = agent && typeof agent === 'object' && !Array.isArray(agent) ? agent : {};
+        process.stdout.write(JSON.stringify({ ...fields, _cell: cells[i] }) + '\n');
+      });
+      break;
+    }
+
+    case 'wave-cell-count': {
+      const waveIdx = parseInt(args[0], 10);
+      const agents = data.waves && data.waves[waveIdx] && data.waves[waveIdx].agents;
+      const cells = cellsForAgents(agents);
+      process.stdout.write(String(cells.length ? Math.max(...cells) + 1 : 0) + '\n');
       break;
     }
 
