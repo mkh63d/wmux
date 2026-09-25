@@ -239,6 +239,17 @@ describe.skipIf(!canRun)('reap-wave.sh', { timeout: SLOW }, () => {
     writeState([[]]);
     expect(reap('nope').status).toBe(1);
   });
+
+  it.each(['1x', '0abc', '-1', '1.5'])('rejects the malformed selector %s without touching wmux', (sel) => {
+    writeState([[{ id: 'a', wmuxAgentId: 'ag-1', surfaceId: 'surf-1', paneId: 'pane-w' }]]);
+    stub.assertReachable();
+
+    const r = reap(`'${sel}'`);
+
+    expect(r.status).toBe(1);
+    expect(stub.calls()).toEqual([]);
+    expect(agentOf(0).reapedAt).toBeUndefined();
+  });
 });
 
 describe.skipIf(!hasBash())('json-tool reaping queries', { timeout: SLOW }, () => {

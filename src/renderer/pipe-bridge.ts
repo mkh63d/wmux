@@ -328,7 +328,7 @@ export function initPipeBridge(): void {
 
   w.__wmux_layoutAgents = (params: { count: number; type?: string; coordinatorRatio?: number; anchorSurfaceId?: string; anchorPaneId?: string; workspaceId?: string }) => {
     const store = useStore.getState();
-    const candidates = params?.workspaceId
+    const candidates = params.workspaceId
       ? store.workspaces.filter(w => w.id === params.workspaceId)
       : store.workspaces;
     for (const ws of candidates) {

@@ -94,6 +94,7 @@ export async function resolveCallerTarget<W>(
 
 const S = (v: any) => JSON.stringify(v);
 
+// Same value as MAX_AGENT_CELLS in renderer/store/split-utils.ts; main's tsconfig does not include the renderer.
 const MAX_LAYOUT_AGENT_CELLS = 16;
 
 /**

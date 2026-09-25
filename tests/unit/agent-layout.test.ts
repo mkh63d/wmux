@@ -9,7 +9,7 @@ import {
   leafFraction,
   MAX_AGENT_CELLS,
 } from '../../src/renderer/store/split-utils';
-import type { SplitNode, PaneId } from '../../src/shared/types';
+import type { SplitNode, PaneId, SurfaceId } from '../../src/shared/types';
 
 const id = (s: string) => s as PaneId;
 const A = id('pane-a');
@@ -159,8 +159,8 @@ describe('buildAgentLayout', () => {
     const anchor = createLeaf(A);
     const surfaces = [
       { ...anchor.surfaces[0] },
-      { id: 'surf-extra1' as any, type: 'browser' as const },
-      { id: 'surf-extra2' as any, type: 'terminal' as const },
+      { id: 'surf-extra1' as SurfaceId, type: 'browser' as const },
+      { id: 'surf-extra2' as SurfaceId, type: 'terminal' as const },
     ];
     const tree: SplitNode = { ...anchor, surfaces, activeSurfaceIndex: 2 };
 

@@ -75,6 +75,16 @@ describe('resolveLayoutSize', () => {
       .toEqual(FALLBACK_LAYOUT_SIZE);
   });
 
+  it.each([
+    ['zero width', { w: 0, h: 0.5 }],
+    ['zero height', { w: 0.5, h: 0 }],
+    ['NaN width', { w: NaN, h: 0.5 }],
+    ['NaN height', { w: 0.5, h: NaN }],
+  ])('falls to 16:9 when the fraction has a %s', (_label, fraction) => {
+    expect(resolveLayoutSize({ paneRect: null, workspaceRect: workspace, fraction }))
+      .toEqual(FALLBACK_LAYOUT_SIZE);
+  });
+
   it('falls to 16:9 when there is no fraction', () => {
     expect(resolveLayoutSize({ paneRect: null, workspaceRect: workspace, fraction: null }))
       .toEqual(FALLBACK_LAYOUT_SIZE);

@@ -16,8 +16,9 @@ if [ -z "$ORCH_DIR" ] || [ -z "$WAVE_SEL" ]; then
   exit 1
 fi
 case "$WAVE_SEL" in
-  all|[0-9]*) ;;
-  *) echo "reap-wave: wave must be a number or 'all', got '$WAVE_SEL'" >&2; exit 1 ;;
+  all) ;;
+  ''|*[!0-9]*) echo "reap-wave: wave must be a number or 'all', got '$WAVE_SEL'" >&2; exit 1 ;;
+  *) ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
