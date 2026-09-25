@@ -362,7 +362,7 @@ CLI's sharp edges (eval scoping, ref format, framework-specific input recipes).
 
 **IMPORTANT: Work in the CURRENT workspace. Do NOT create or close workspaces — that hides agent panes from the user.**
 
-The spawn script (`spawn-agents.sh`) creates the panes with `wmux layout agents` (one atomic split-tree mutation for the whole wave). It splits **only the coordinator's own pane**: the coordinator stays on the left in a fixed column (40% of that pane's width), and the workers get a grid on the right. The grid's shape follows the coordinator pane's real pixel size when the wave is laid out: on a wide window two workers sit side by side, on a 16:9 one they are stacked. Nothing is re-laid out when the window is resized afterwards; the splits just scale.
+The spawn script (`spawn-agents.sh`) creates the panes with `wmux layout agents` (one atomic split-tree mutation for the whole wave). It splits **only the coordinator's own pane**: the coordinator stays on the left in a fixed column (40% of that pane's width), and the workers get a grid on the right. The grid's shape follows the coordinator pane's real pixel size when the wave is laid out: on an ultrawide pane two workers sit side by side, on a 16:9 or 21:9 one they are stacked. Nothing is re-laid out when the window is resized afterwards; the splits just scale.
 
 Every other pane in the workspace stays exactly where it was, so you do not need to clear the window before an orchestration. If you want a pane of your own next to the run, split it off the coordinator yourself.
 
