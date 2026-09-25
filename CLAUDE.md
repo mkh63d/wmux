@@ -553,8 +553,9 @@ The source still ships in `resources/wmux-orchestrator/` — `scripts/launch-age
 ```
 resources/wmux-orchestrator/
   .claude-plugin/plugin.json    Manifest (name, version, author)
-  commands/orchestrate.md       /wmux:orchestrate slash command
-  skills/orchestrate/SKILL.md   Core: codebase analysis, wave planning, agent spawning
+  skills/orchestrate/SKILL.md   Core: codebase analysis, wave planning, agent spawning. Invoked as
+                                /wmux-orchestrator:orchestrate <task>; there is deliberately no command
+                                of the same name (a command and a skill sharing it loop into each other)
   skills/reviewer/SKILL.md      Post-orchestration review and auto-fix
   skills/wmux-detect/SKILL.md   Detects wmux availability for degraded mode
   agents/wmux-worker.md         Worker template with file zone enforcement
