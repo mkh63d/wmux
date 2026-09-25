@@ -9,6 +9,7 @@
 //   node json-tool.js query <file> <query-name> [args...]
 //   node json-tool.js update-agent <file> <agentId> <field=value>...
 //   node json-tool.js dashboard <file>
+//   node json-tool.js find-unreaped-finished <baseDir>
 //   node json-tool.js parse-json <jsonString> <path>
 
 'use strict';
@@ -288,6 +289,31 @@ function cmdQuery(file, queryName, ...args) {
       break;
     }
 
+    case 'reap-candidates': {
+      // One tab-separated line per agent that still has a surface to close:
+      // id, wmuxAgentId, surfaceId, paneId ('-' stands for an empty field, so
+      // `read` with a tab IFS cannot collapse it). The caller's own surface
+      // goes last: killing its own PTY may end the script running this.
+      const sel = args[0];
+      const callerSurface = args[1] || '';
+      const waves = data.waves || [];
+      const indexes = sel === 'all' ? waves.map((_, i) => i) : [parseInt(sel, 10)];
+      const rows = [];
+      for (const wi of indexes) {
+        for (const agent of (waves[wi] && waves[wi].agents) || []) {
+          if (!agent.surfaceId || agent.reapedAt) continue;
+          rows.push(agent);
+        }
+      }
+      const own = a => (callerSurface && a.surfaceId === callerSurface ? 1 : 0);
+      rows.sort((a, b) => own(a) - own(b));
+      const cell = v => (v === undefined || v === null || v === '' ? '-' : String(v));
+      for (const a of rows) {
+        process.stdout.write([a.id, cell(a.wmuxAgentId), a.surfaceId, cell(a.paneId)].join('\t') + '\n');
+      }
+      break;
+    }
+
     default:
       process.stderr.write(`json-tool: unknown query "${queryName}"\n`);
       process.exit(1);
@@ -385,6 +411,33 @@ function cmdParseJson(jsonStr, dotPath) {
   }
 }
 
+/**
+ * A finished run is one a Stop hook may reap: terminal status, written by a
+ * plugin version that records coordinatorPaneId, and not reaped yet.
+ * One node process scans every run dir, so the hook pays for one, not N.
+ */
+function cmdFindUnreapedFinished(baseDir) {
+  let names;
+  try {
+    names = fs.readdirSync(baseDir);
+  } catch {
+    return;
+  }
+  const finished = new Set(['complete', 'aborted', 'failed']);
+  for (const name of names.sort()) {
+    if (!name.startsWith('wmux-orch-')) continue;
+    let state;
+    try {
+      state = JSON.parse(fs.readFileSync(path.join(baseDir, name, 'state.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!state || !finished.has(state.status)) continue;
+    if (!state.coordinatorPaneId || state.reapedAt) continue;
+    process.stdout.write(baseDir.replace(/[\\/]+$/, '') + '/' + name + '\n');
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -392,7 +445,7 @@ const cmd = args[0];
 
 if (!cmd) {
   process.stderr.write('Usage: node json-tool.js <command> [args...]\n');
-  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, parse-json\n');
+  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, find-unreaped-finished, parse-json\n');
   process.exit(1);
 }
 
@@ -425,6 +478,11 @@ switch (cmd) {
   case 'dashboard':
     if (args.length < 2) { process.stderr.write('Usage: node json-tool.js dashboard <file>\n'); process.exit(1); }
     cmdDashboard(args[1]);
+    break;
+
+  case 'find-unreaped-finished':
+    if (args.length < 2) { process.stderr.write('Usage: node json-tool.js find-unreaped-finished <baseDir>\n'); process.exit(1); }
+    cmdFindUnreapedFinished(args[1]);
     break;
 
   case 'parse-json':

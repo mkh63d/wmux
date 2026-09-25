@@ -8,6 +8,7 @@ exports.RAW_V1_VERBS = void 0;
 exports.timeoutMessage = timeoutMessage;
 exports.browserRequest = browserRequest;
 exports.subcommandError = subcommandError;
+exports.layoutAgentsParams = layoutAgentsParams;
 exports.emptyPromptNote = emptyPromptNote;
 exports.promptTruncationNote = promptTruncationNote;
 exports.rawV1Error = rawV1Error;
@@ -630,7 +631,49 @@ async function cmdLocales(args) {
         process.exit(1);
     }
 }
+/**
+ * `wmux layout agents` flags -> `layout.agents` params. The caller's surface is
+ * only the anchor when no explicit anchor was given: the renderer treats an
+ * explicit `anchorPaneId` as authoritative, so sending a pane AND the caller's
+ * surface would turn a stale pane into a miss instead of a fallback.
+ */
+function layoutAgentsParams(args, callerSurfaceId) {
+    const params = {};
+    for (let i = 0; i < args.length; i += 2) {
+        const value = args[i + 1];
+        if (args[i] === '--count')
+            params.count = /^\d+$/.test(value ?? '') ? parseInt(value, 10) : NaN;
+        if (args[i] === '--type')
+            params.type = value;
+        if (args[i] === '--coordinator-ratio')
+            params.coordinatorRatio = value === undefined || value.trim() === '' ? NaN : Number(value);
+        if (args[i] === '--anchor-surface')
+            params.anchorSurfaceId = value;
+        if (args[i] === '--anchor-pane')
+            params.anchorPaneId = value;
+        if (args[i] === '--workspace')
+            params.workspaceId = value;
+    }
+    if (!Number.isInteger(params.count) || params.count < 1)
+        return { error: '--count <N> is required and must be an integer >= 1' };
+    if ('coordinatorRatio' in params && !Number.isFinite(params.coordinatorRatio)) {
+        return { error: '--coordinator-ratio must be a number (0.2 to 0.8)' };
+    }
+    if (!params.anchorSurfaceId && !params.anchorPaneId && callerSurfaceId) {
+        params.anchorSurfaceId = callerSurfaceId;
+    }
+    return { params };
+}
 async function cmdLayout(args) {
+    if (args[1] === 'agents') {
+        const parsed = layoutAgentsParams(args.slice(2), process.env.WMUX_SURFACE_ID);
+        if ('error' in parsed) {
+            console.error(parsed.error);
+            process.exit(1);
+        }
+        print(await sendV2('layout.agents', parsed.params));
+        return;
+    }
     if (args[1] !== 'grid')
         failSubcommand('layout', args[1]);
     const params = {};
@@ -1715,8 +1758,9 @@ const COMMAND_SPECS = {
     tree: { usage: 'wmux tree [--workspace <workspaceId>]', value: ['--workspace'] },
     // Layout
     layout: {
-        usage: 'wmux layout grid --count <N> [--type T] [--anchor-surface <id>] [--anchor-pane <id>] [--workspace <id>]',
-        value: ['--count', '--type', '--anchor-surface', '--anchor-pane', '--workspace'],
+        usage: 'wmux layout grid --count <N> [--type T] [--anchor-surface <id>] [--anchor-pane <id>] [--workspace <id>]\n'
+            + 'wmux layout agents --count <N> [--type T] [--coordinator-ratio R] [--anchor-surface <id>] [--anchor-pane <id>] [--workspace <id>]',
+        value: ['--count', '--type', '--coordinator-ratio', '--anchor-surface', '--anchor-pane', '--workspace'],
     },
     // Terminal interaction
     send: { usage: 'wmux send [--surface <id>] <text>', passthrough: true },
@@ -2108,6 +2152,7 @@ Surface:    new-surface [--type T] [--color-scheme NAME], close-surface, focus-s
 Pane:       split [--down] [--type T] [--color-scheme NAME], close-pane, focus-pane, zoom-pane, list-panes, tree
             pane new|close|focus|list   (verb form, mirrors issue #4 example)
 Layout:     layout grid --count <N> [--type terminal] [--anchor-surface <id>]
+            layout agents --count <N> [--coordinator-ratio R] [--anchor-surface <id>]
 Terminal:   send <text>, send-key <key>, read-screen [--lines N] [--surface <id>], trigger-flash
             prompts [--surface <id>] [--limit N] [--json]
             (the prompts this pane was given — the one thing read-screen cannot

@@ -362,13 +362,11 @@ CLI's sharp edges (eval scoping, ref format, framework-specific input recipes).
 
 **IMPORTANT: Work in the CURRENT workspace. Do NOT create or close workspaces — that hides agent panes from the user.**
 
-The spawn script (`spawn-agents.sh`) automatically creates panes via `wmux layout grid` (one atomic split-tree mutation for the whole wave).
+The spawn script (`spawn-agents.sh`) creates the panes with `wmux layout agents` (one atomic split-tree mutation for the whole wave). It splits **only the coordinator's own pane**: the coordinator stays on the left in a fixed column (40% of that pane's width), and the workers get a grid on the right. The grid's shape follows the coordinator pane's real pixel size when the wave is laid out: on an ultrawide pane two workers sit side by side, on a 16:9 or 21:9 one they are stacked. Nothing is re-laid out when the window is resized afterwards; the splits just scale.
 
-**Pane hygiene — start each orchestration from a single coordinator pane.** Re-gridding a window
-that already has extra panes (a previous run's agents, stray splits) does NOT reuse them: the old
-panes' surfaces get orphaned as dead tabs on the coordinator pane. If leftover agent panes exist
-from a previous wave or run, close them first (`wmux close-pane <paneId>` — positional id, and never
-the coordinator's own pane).
+Every other pane in the workspace stays exactly where it was, so you do not need to clear the window before an orchestration. If you want a pane of your own next to the run, split it off the coordinator yourself.
+
+Before laying out wave N, `spawn-agents.sh` reaps the agents of waves 0..N-1 (see Phase 7), so their panes are gone and the coordinator has its full width back. One limitation: if you added a tab of your own to a worker pane, reaping closes only the agent's tab and that pane survives. The next wave then splits the coordinator's pane again and the coordinator gets 40% of 40%. Close the leftover pane by hand if that bothers you.
 
 ### 6e. Spawn Wave 1 agents
 
@@ -382,8 +380,8 @@ bash "$PLUGIN_ROOT/scripts/spawn-agents.sh" "[orch-dir]" 0
 ```
 
 This script:
-1. Creates a pane per agent via `wmux layout grid --count <agents+1>` (orchestrator keeps the anchor cell)
-2. Runs `node launch-agent.js <prompt-file>` in each pane via `wmux agent spawn --replace-tab`, so the agent TUI replaces the grid pane's default terminal tab (agent panes end with a single tab)
+1. Reaps the agents of earlier waves, then creates one pane per agent via `wmux layout agents --count <agents>` (falls back to `layout grid` only on a wmux that has no `layout agents`)
+2. Runs `node launch-agent.js <prompt-file>` in each pane via `wmux agent spawn --replace-tab`, so the agent TUI replaces the grid pane's default terminal tab (agent panes end with a single tab), and records each agent's `wmuxAgentId`, `paneId` and `surfaceId` in `state.json`
 3. `launch-agent.js` uses `execFileSync` with `'--'` separator to pass the full prompt as a positional argument — this bypasses all shell quoting issues
 4. Claude starts in **interactive mode with full TUI** — the prompt auto-submits and Claude begins working immediately
 5. The user can watch agents in real-time by clicking their pane tabs, and can type into any agent to intervene
@@ -466,17 +464,25 @@ over many rapid updates.)
    ```
 2. Report results to the user: which agents succeeded, which failed, what they produced
 3. Mark the wave `complete` in state.json (see above), then **reap the idle agent TUIs**:
-   `wmux agent kill <agentId>` for each finished agent (ids from `wmux agent list`), and close their
-   panes (`wmux close-pane <paneId>`) so the next wave starts from a clean layout.
-   ⚠ `agent kill` does NOT kill processes the agent started (dev servers, watchers) — if agents
-   launched servers, sweep the project's ports for orphaned listeners before starting new ones.
+   ```bash
+   bash "$PLUGIN_ROOT/scripts/reap-wave.sh" "[orch-dir]" <wave-index>
+   ```
+   It kills each agent, closes its tab (a pane goes with its last tab) and stamps `reapedAt` in
+   `state.json`. It is idempotent, so running it twice is harmless. Never close the coordinator's
+   own pane by hand; the script already refuses to.
+   ⚠ `agent kill` tree-kills the agent's shell on Windows, so dev servers and watchers still in that
+   process tree die with it. Only processes that left the tree survive (`start`, `Start-Process`,
+   daemons that re-parent) — if agents launched those, sweep the project's ports for orphaned
+   listeners before starting new ones.
 4. If there are more waves:
    a. Generate prompt files for Wave N+1 (inject previous wave results into the "Previous Wave Results" section)
    b. Spawn Wave N+1 agents: `bash "$PLUGIN_ROOT/scripts/spawn-agents.sh" "[orch-dir]" [N+1]`
    c. Verify agents spawned with `wmux agent list`
    d. Continue monitoring loop
 5. If all waves are done, mark the run `complete` (`update_state "[orch-dir]" ".status" complete`)
-   and proceed to Phase 8
+   and proceed to Phase 8. The Stop hook (`on-stop.sh`) also reaps every agent of a run once it is
+   marked `complete`, `aborted` or `failed`, so the last wave is closed even if this step is lost;
+   Phase 9 still reaps explicitly.
 
 **Nudging a running worker:** `wmux send` / `send-key` target the **caller's own surface** by
 default — without `--surface` the text lands in YOUR session as fake input, not the worker's. To
@@ -514,10 +520,13 @@ After the reviewer completes, present a summary:
 - Reviewer findings and corrections
 - Offer actions: **commit** / **view full diff** / **abort all changes**
 
-Then **collapse the layout back to a single coordinator pane**: `wmux agent kill <agentId>` any
-agents still idling, `wmux close-pane <paneId>` their panes, and sweep for orphaned child processes
-(dev servers the agents started survive `agent kill` and can hold ports hostage for the next run).
-A clean single-pane state is what makes the next orchestration's grid come up without orphaned tabs.
+Then **close the remaining agents** so the coordinator gets its full width back:
+```bash
+bash "$PLUGIN_ROOT/scripts/reap-wave.sh" "[orch-dir]" all
+```
+Agents that were already reaped are skipped. Sweep for orphaned child processes too: anything the
+agents started that left their shell's process tree survives `agent kill` and can hold ports hostage
+for the next run.
 
 To abort a botched run and clear the cockpit: `update_state "[orch-dir]" ".status" aborted` — the
 sidebar only tracks the most recent *running* orchestration.
