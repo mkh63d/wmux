@@ -561,7 +561,8 @@ resources/wmux-orchestrator/
   hooks/hooks.json              PostToolUse, SubagentStop, Stop, SessionStart
   scripts/json-tool.js          Node.js JSON helper (replaces jq)
   scripts/orchestration-state.sh  State file management library
-  scripts/spawn-agents.sh       Creates panes + launches Claude Code agents
+  scripts/spawn-agents.sh       Creates panes (`layout agents`) + launches Claude Code agents
+  scripts/reap-wave.sh          Kills a wave's agents and closes their tabs; also run by the Stop hook
   scripts/on-agent-stop.sh      Wave transition driver (core orchestration)
   scripts/check-status.sh       Markdown dashboard generator
   scripts/*.sh                  Other utilities (cleanup, collect-results, etc.)

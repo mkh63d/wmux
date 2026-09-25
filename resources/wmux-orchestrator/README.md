@@ -141,13 +141,14 @@ wmux-orchestrator/
   scripts/
     orchestration-state.sh          # State file read/write helpers
     spawn-agents.sh                 # Launch agents for a wave via wmux CLI
+    reap-wave.sh                    # Kill a wave's agents and close their tabs (idempotent)
     check-status.sh                 # Read-only status check for dashboard
     collect-results.sh              # Aggregate agent result files
     update-dashboard.sh             # Refresh the live markdown dashboard
     detect-wmux.sh                  # Check if wmux is running (pipe test)
     on-tool-use.sh                  # Hook: increment tool use counter
     on-agent-stop.sh                # Hook: wave transition logic
-    on-stop.sh                      # Hook: warn if orchestration is active
+    on-stop.sh                      # Hook: warn if orchestration is active, reap finished runs
     on-session-start.sh             # Hook: crash recovery check
     cleanup.sh                      # Remove orchestration temp files
   package.json
