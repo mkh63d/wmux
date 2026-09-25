@@ -11,6 +11,7 @@
 //   node json-tool.js dashboard <file>
 //   node json-tool.js find-unreaped-finished <baseDir>
 //   node json-tool.js parse-json <jsonString> <path>
+//   node json-tool.js find-spawned <label> <paneId>   (`wmux agent list` JSON on stdin)
 
 'use strict';
 
@@ -126,6 +127,25 @@ function findAgent(data, agentId) {
     }
   }
   return null;
+}
+
+/**
+ * Cell index per agent of one wave: agents sharing a trimmed, non-blank string
+ * `group` share a cell; every other agent (missing/null/non-string/blank group,
+ * or a non-object entry) gets its own. Cells are numbered by first appearance.
+ * The sidebar's groupWaveAgents applies the same rule; a parity test pins both.
+ */
+function cellsForAgents(agents) {
+  const list = Array.isArray(agents) ? agents : [];
+  const byName = new Map();
+  let next = 0;
+  return list.map(agent => {
+    const raw = agent && typeof agent === 'object' ? agent.group : undefined;
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (name === '') return next++;
+    if (!byName.has(name)) byName.set(name, next++);
+    return byName.get(name);
+  });
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -289,6 +309,29 @@ function cmdQuery(file, queryName, ...args) {
       break;
     }
 
+    case 'wave-cells-each': {
+      // Each agent as a compact JSON line plus its 0-based "_cell" (agents that
+      // share a group share a cell). A non-object entry has no fields to carry
+      // it, so it prints as {"_cell":n} to keep the line count equal to agents[].
+      const waveIdx = parseInt(args[0], 10);
+      const agents = data.waves && data.waves[waveIdx] && data.waves[waveIdx].agents;
+      if (!Array.isArray(agents)) break;
+      const cells = cellsForAgents(agents);
+      agents.forEach((agent, i) => {
+        const fields = agent && typeof agent === 'object' && !Array.isArray(agent) ? agent : {};
+        process.stdout.write(JSON.stringify({ ...fields, _cell: cells[i] }) + '\n');
+      });
+      break;
+    }
+
+    case 'wave-cell-count': {
+      const waveIdx = parseInt(args[0], 10);
+      const agents = data.waves && data.waves[waveIdx] && data.waves[waveIdx].agents;
+      const cells = cellsForAgents(agents);
+      process.stdout.write(String(cells.length ? Math.max(...cells) + 1 : 0) + '\n');
+      break;
+    }
+
     case 'reap-candidates': {
       // One tab-separated line per agent that still has a surface to close:
       // id, wmuxAgentId, surfaceId, paneId ('-' stands for an empty field, so
@@ -438,6 +481,34 @@ function cmdFindUnreapedFinished(baseDir) {
   }
 }
 
+/**
+ * The agent a timed-out `wmux agent spawn` may still have started: running, in
+ * the pane it was spawned into, under its label. The newest one wins if there
+ * are several. Accepts the CLI's `{agents:[...]}` reply or a bare array.
+ */
+function findSpawned(list, label, paneId) {
+  const agents = Array.isArray(list) ? list : list && Array.isArray(list.agents) ? list.agents : [];
+  let best = null;
+  for (const a of agents) {
+    if (!a || typeof a !== 'object') continue;
+    if (a.status !== 'running' || a.label !== label || a.paneId !== paneId) continue;
+    const t = typeof a.spawnTime === 'number' ? a.spawnTime : -Infinity;
+    if (!best || t > best.t) best = { agent: a, t };
+  }
+  return best ? best.agent : null;
+}
+
+function cmdFindSpawned(label, paneId) {
+  let list;
+  try {
+    list = JSON.parse(fs.readFileSync(0, 'utf8'));
+  } catch {
+    return;
+  }
+  const found = findSpawned(list, label, paneId);
+  if (found) process.stdout.write(JSON.stringify(found) + '\n');
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -445,7 +516,7 @@ const cmd = args[0];
 
 if (!cmd) {
   process.stderr.write('Usage: node json-tool.js <command> [args...]\n');
-  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, find-unreaped-finished, parse-json\n');
+  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, find-unreaped-finished, parse-json, find-spawned\n');
   process.exit(1);
 }
 
@@ -488,6 +559,11 @@ switch (cmd) {
   case 'parse-json':
     if (args.length < 3) { process.stderr.write('Usage: node json-tool.js parse-json <jsonString> <path>\n'); process.exit(1); }
     cmdParseJson(args[1], args[2]);
+    break;
+
+  case 'find-spawned':
+    if (args.length < 3) { process.stderr.write('Usage: node json-tool.js find-spawned <label> <paneId> < agent-list.json\n'); process.exit(1); }
+    cmdFindSpawned(args[1], args[2]);
     break;
 
   default:

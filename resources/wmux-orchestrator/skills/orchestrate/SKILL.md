@@ -89,6 +89,12 @@ Determine agent count per wave based on:
 - Maximum practical limit: 5 agents per wave (more causes diminishing returns from context overhead)
 - If only 1 subtask exists, skip orchestration and do it directly
 
+**Pane groups (optional, wmux only).** By default every agent of a wave gets its own cell in the worker grid. With several agents per wave the cells get small, so you may put related agents of **one wave** into one pane as tabs by giving them the same `group` string (see the 6b schema). Group agents that:
+- work on the same feature or bug, or do the same kind of work (e.g. all coders of one feature), and
+- do not need to be watched side by side.
+
+Prefer groups of 2–3; leave an agent ungrouped when the user will want to see it at a glance. A group lives inside one wave only: the same name in two waves means two unrelated groups. So a "coder → reviewer" pair for one bug is **not** a group, because the reviewer depends on the coder and sits in a later wave. Only agents that run in parallel in the same wave can share a pane. This is unrelated to the "coupled group" of Phase 4.5, which is about a shared contract, not about panes; a pane group may or may not be coupled. See "Grouping agents into panes" in the decomposition guide.
+
 ## Phase 4.5: Detect Coupling & Generate Contracts
 
 Before presenting the plan, audit each wave for **coupling**: cases where multiple parallel agents must agree on names, types, shapes, or IDs for the final output to work. Coupling that isn't explicitly coordinated causes drift — agents independently invent different names for the same concept and the integration breaks. (This actually happened on a past run: two parallel agents building HTML and CSS invented different class names like `.hero__grid` vs `.hero__inner` for the same element, and 510 lines of alias CSS were needed to reconcile after the fact.)
@@ -203,9 +209,14 @@ Wave 1 — [description]
 
 Wave 2 (after Wave 1) — [description]
   Agent B: "[subtask label]"
+    Group: "[group name]"
     Allowed files: [list]
     Excluded files: [list]
   Agent C: "[subtask label]"
+    Group: "[group name]"
+    Allowed files: [list]
+    Excluded files: [list]
+  Agent E: "[subtask label]"
     Allowed files: [list]
     Excluded files: [list]
 
@@ -218,6 +229,8 @@ Options:
   --worktree: Isolate each agent in a git worktree (default: no)
   --no-review: Skip the automated reviewer (default: review enabled)
 ```
+
+Show a `Group: "<name>"` line only on grouped agents (Phase 4, "Pane groups"). Agents with the same name in one wave share a pane: above, B and C are tabs of one pane and E has its own. The user may regroup or ungroup agents when adjusting the plan.
 
 Ask the user: **"Validate this plan? (yes / adjust / cancel)"**
 
@@ -271,6 +284,7 @@ Write `state.json` using the Write tool. Schema:
         {
           "id": "a",
           "label": "Subtask label",
+          "group": null,
           "subtask": "Full subtask description",
           "files": ["allowed/file/paths"],
           "excludeFiles": ["excluded/patterns/*"],
@@ -304,6 +318,12 @@ drops to a bare shell, and result collection misses the files.
 **Use forward-slash paths in `state.json`** (`"cwd": "C:/projects/app"`, not `C:\projects\app`).
 Backslashes written through a bash heredoc collapse into invalid JSON escapes (`\p`), every reader
 fails to parse the file, and the sidebar silently freezes at 0/N.
+
+**`group`** is optional: `null` (or leave it out) for an agent that gets its own pane, or the pane
+group's name from the approved plan, e.g. `"group": "bug-x"`. Agents of the **same wave** with the same
+name (compared after trimming whitespace, case-sensitive) share one pane as tabs. A value that is not
+a string, or is empty after trimming, counts as ungrouped. The sidebar shows each group as a header with its members and
+a `done/total` count.
 
 Set the first wave's status to "running", all others to "pending".
 
@@ -364,6 +384,8 @@ CLI's sharp edges (eval scoping, ref format, framework-specific input recipes).
 
 The spawn script (`spawn-agents.sh`) creates the panes with `wmux layout agents` (one atomic split-tree mutation for the whole wave). It splits **only the coordinator's own pane**: the coordinator stays on the left in a fixed column (40% of that pane's width), and the workers get a grid on the right. The grid's shape follows the coordinator pane's real pixel size when the wave is laid out: on an ultrawide pane two workers sit side by side, on a 16:9 or 21:9 one they are stacked. Nothing is re-laid out when the window is resized afterwards; the splits just scale.
 
+The grid has **one cell per group** and one per ungrouped agent (Phase 4, "Pane groups"), not one per agent, so a wave of 4 agents where 3 share a `group` gets 2 cells. Cells follow the order in which each group or ungrouped agent first appears in the wave's `agents[]`.
+
 Every other pane in the workspace stays exactly where it was, so you do not need to clear the window before an orchestration. If you want a pane of your own next to the run, split it off the coordinator yourself.
 
 Before laying out wave N, `spawn-agents.sh` reaps the agents of waves 0..N-1 (see Phase 7), so their panes are gone and the coordinator has its full width back. One limitation: if you added a tab of your own to a worker pane, reaping closes only the agent's tab and that pane survives. The next wave then splits the coordinator's pane again and the coordinator gets 40% of 40%. Close the leftover pane by hand if that bothers you.
@@ -380,11 +402,12 @@ bash "$PLUGIN_ROOT/scripts/spawn-agents.sh" "[orch-dir]" 0
 ```
 
 This script:
-1. Reaps the agents of earlier waves, then creates one pane per agent via `wmux layout agents --count <agents>` (falls back to `layout grid` only on a wmux that has no `layout agents`)
-2. Runs `node launch-agent.js <prompt-file>` in each pane via `wmux agent spawn --replace-tab`, so the agent TUI replaces the grid pane's default terminal tab (agent panes end with a single tab), and records each agent's `wmuxAgentId`, `paneId` and `surfaceId` in `state.json`
-3. `launch-agent.js` uses `execFileSync` with `'--'` separator to pass the full prompt as a positional argument — this bypasses all shell quoting issues
-4. Claude starts in **interactive mode with full TUI** — the prompt auto-submits and Claude begins working immediately
-5. The user can watch agents in real-time by clicking their pane tabs, and can type into any agent to intervene
+1. Reaps the agents of earlier waves, then creates one cell per group or ungrouped agent via `wmux layout agents --count <cells>` (falls back to `layout grid --count <cells + 1>` only on a wmux that has no `layout agents`)
+2. Runs `node launch-agent.js <prompt-file>` in each cell's pane via `wmux agent spawn`. The first member of a cell to spawn successfully uses `--replace-tab`, so its TUI replaces the pane's default terminal tab; the other members of a group are appended to the same pane as tabs, labelled with their agent labels. An ungrouped agent's pane therefore ends with a single tab. Each agent's `wmuxAgentId`, `paneId` (its cell's pane) and `surfaceId` are recorded in `state.json`
+3. After the whole wave has spawned, makes the **first member that spawned successfully** the active tab of each group where at least two members spawned, with `wmux focus-surface` (a failure there is only a warning). This changes the pane's active tab only; your keyboard focus stays in the coordinator pane. Background tabs keep running. When the wave is reaped, each member's tab closes and the pane goes away with the last one
+4. `launch-agent.js` uses `execFileSync` with `'--'` separator to pass the full prompt as a positional argument — this bypasses all shell quoting issues
+5. Claude starts in **interactive mode with full TUI** — the prompt auto-submits and Claude begins working immediately
+6. The user can watch agents in real-time by clicking their pane tabs, and can type into any agent to intervene
 
 After spawning, verify agents are running:
 ```bash
