@@ -11,6 +11,7 @@
 //   node json-tool.js dashboard <file>
 //   node json-tool.js find-unreaped-finished <baseDir>
 //   node json-tool.js parse-json <jsonString> <path>
+//   node json-tool.js find-spawned <label> <paneId>   (`wmux agent list` JSON on stdin)
 
 'use strict';
 
@@ -480,6 +481,34 @@ function cmdFindUnreapedFinished(baseDir) {
   }
 }
 
+/**
+ * The agent a timed-out `wmux agent spawn` may still have started: running, in
+ * the pane it was spawned into, under its label. The newest one wins if there
+ * are several. Accepts the CLI's `{agents:[...]}` reply or a bare array.
+ */
+function findSpawned(list, label, paneId) {
+  const agents = Array.isArray(list) ? list : list && Array.isArray(list.agents) ? list.agents : [];
+  let best = null;
+  for (const a of agents) {
+    if (!a || typeof a !== 'object') continue;
+    if (a.status !== 'running' || a.label !== label || a.paneId !== paneId) continue;
+    const t = typeof a.spawnTime === 'number' ? a.spawnTime : -Infinity;
+    if (!best || t > best.t) best = { agent: a, t };
+  }
+  return best ? best.agent : null;
+}
+
+function cmdFindSpawned(label, paneId) {
+  let list;
+  try {
+    list = JSON.parse(fs.readFileSync(0, 'utf8'));
+  } catch {
+    return;
+  }
+  const found = findSpawned(list, label, paneId);
+  if (found) process.stdout.write(JSON.stringify(found) + '\n');
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 const args = process.argv.slice(2);
@@ -487,7 +516,7 @@ const cmd = args[0];
 
 if (!cmd) {
   process.stderr.write('Usage: node json-tool.js <command> [args...]\n');
-  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, find-unreaped-finished, parse-json\n');
+  process.stderr.write('Commands: get, set, inc, query, update-agent, dashboard, find-unreaped-finished, parse-json, find-spawned\n');
   process.exit(1);
 }
 
@@ -530,6 +559,11 @@ switch (cmd) {
   case 'parse-json':
     if (args.length < 3) { process.stderr.write('Usage: node json-tool.js parse-json <jsonString> <path>\n'); process.exit(1); }
     cmdParseJson(args[1], args[2]);
+    break;
+
+  case 'find-spawned':
+    if (args.length < 3) { process.stderr.write('Usage: node json-tool.js find-spawned <label> <paneId> < agent-list.json\n'); process.exit(1); }
+    cmdFindSpawned(args[1], args[2]);
     break;
 
   default:

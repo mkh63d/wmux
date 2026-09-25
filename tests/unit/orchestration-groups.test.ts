@@ -182,3 +182,51 @@ describe('groupWaveAgents and json-tool agree on cells', () => {
     expect(count).toBe(groupWaveAgents(agents as OrchestrationAgent[]).length);
   });
 });
+
+function findSpawned(stdin: string, label: string, paneId: string): string {
+  return execFileSync(process.execPath, [JSON_TOOL, 'find-spawned', label, paneId], { encoding: 'utf8', input: stdin }).trim();
+}
+
+const listed = (agentId: string, over: Record<string, unknown> = {}) => ({
+  agentId,
+  surfaceId: `surf-${agentId}`,
+  paneId: 'pane-1',
+  label: 'L',
+  status: 'running',
+  spawnTime: 1,
+  ...over,
+});
+
+describe('json-tool find-spawned', () => {
+  it('prints the running agent with that label in that pane', () => {
+    const out = findSpawned(JSON.stringify({ agents: [listed('x')] }, null, 2), 'L', 'pane-1');
+    expect(JSON.parse(out)).toMatchObject({ agentId: 'x', surfaceId: 'surf-x' });
+  });
+
+  it('takes the newest spawnTime when several match', () => {
+    const agents = [listed('old', { spawnTime: 10 }), listed('new', { spawnTime: 30 }), listed('mid', { spawnTime: 20 })];
+    expect(JSON.parse(findSpawned(JSON.stringify({ agents }), 'L', 'pane-1')).agentId).toBe('new');
+  });
+
+  it('accepts a bare array as well as the CLI\'s {agents} reply', () => {
+    expect(JSON.parse(findSpawned(JSON.stringify([listed('x')]), 'L', 'pane-1')).agentId).toBe('x');
+  });
+
+  it('ignores another pane, another label, and anything not running', () => {
+    const agents = [
+      listed('a', { paneId: 'pane-2' }),
+      listed('b', { label: 'other' }),
+      listed('c', { status: 'exited' }),
+      listed('d', { status: 'spawning' }),
+      null,
+      'junk',
+    ];
+    expect(findSpawned(JSON.stringify({ agents }), 'L', 'pane-1')).toBe('');
+  });
+
+  it('prints nothing for input that is not an agent list', () => {
+    expect(findSpawned('', 'L', 'pane-1')).toBe('');
+    expect(findSpawned('not json', 'L', 'pane-1')).toBe('');
+    expect(findSpawned('{"error":"wmux not running"}', 'L', 'pane-1')).toBe('');
+  });
+});

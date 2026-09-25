@@ -321,8 +321,8 @@ fails to parse the file, and the sidebar silently freezes at 0/N.
 
 **`group`** is optional: `null` (or leave it out) for an agent that gets its own pane, or the pane
 group's name from the approved plan, e.g. `"group": "bug-x"`. Agents of the **same wave** with the same
-name (compared after trimming whitespace, case-sensitive) share one pane as tabs. Anything that is not
-a non-empty string counts as ungrouped. The sidebar shows each group as a header with its members and
+name (compared after trimming whitespace, case-sensitive) share one pane as tabs. A value that is not
+a string, or is empty after trimming, counts as ungrouped. The sidebar shows each group as a header with its members and
 a `done/total` count.
 
 Set the first wave's status to "running", all others to "pending".
@@ -404,7 +404,7 @@ bash "$PLUGIN_ROOT/scripts/spawn-agents.sh" "[orch-dir]" 0
 This script:
 1. Reaps the agents of earlier waves, then creates one cell per group or ungrouped agent via `wmux layout agents --count <cells>` (falls back to `layout grid --count <cells + 1>` only on a wmux that has no `layout agents`)
 2. Runs `node launch-agent.js <prompt-file>` in each cell's pane via `wmux agent spawn`. The first member of a cell to spawn successfully uses `--replace-tab`, so its TUI replaces the pane's default terminal tab; the other members of a group are appended to the same pane as tabs, labelled with their agent labels. An ungrouped agent's pane therefore ends with a single tab. Each agent's `wmuxAgentId`, `paneId` (its cell's pane) and `surfaceId` are recorded in `state.json`
-3. After the whole wave has spawned, makes the **first member** of each group the active tab with `wmux focus-surface` (a failure there is only a warning). This changes the pane's active tab only; your keyboard focus stays in the coordinator pane. Background tabs keep running. When the wave is reaped, each member's tab closes and the pane goes away with the last one
+3. After the whole wave has spawned, makes the **first member that spawned successfully** the active tab of each group where at least two members spawned, with `wmux focus-surface` (a failure there is only a warning). This changes the pane's active tab only; your keyboard focus stays in the coordinator pane. Background tabs keep running. When the wave is reaped, each member's tab closes and the pane goes away with the last one
 4. `launch-agent.js` uses `execFileSync` with `'--'` separator to pass the full prompt as a positional argument — this bypasses all shell quoting issues
 5. Claude starts in **interactive mode with full TUI** — the prompt auto-submits and Claude begins working immediately
 6. The user can watch agents in real-time by clicking their pane tabs, and can type into any agent to intervene

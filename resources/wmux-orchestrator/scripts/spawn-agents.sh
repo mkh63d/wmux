@@ -104,6 +104,10 @@ if [ -n "$ANCHOR_PANE" ] && [ "$ANCHOR_PANE" != "null" ]; then
   fi
 fi
 
+spawn_timed_out() {
+  printf '%s' "$1" | grep -Eq 'timed out after .* may still have completed'
+}
+
 # Spawn each agent into its cell's pane. Process substitution keeps the counters
 # in the parent shell (unlike `node ... | while`). The per-cell arrays are
 # indexed, not associative: macOS ships bash 3.2.
@@ -139,6 +143,18 @@ while IFS= read -r agent; do
   SPAWNED_AGENT_ID=$(parse_json "$SPAWN_RESULT" '.agentId')
   SPAWNED_SURFACE_ID=$(parse_json "$SPAWN_RESULT" '.surfaceId')
 
+  # The CLI gives up after a few seconds while wmux may still finish the spawn
+  # (seen with several Claude sessions starting at once). Unrecorded, that agent
+  # could never be reaped, so look for it once before calling it a failure.
+  if { [ -z "$SPAWNED_AGENT_ID" ] || [ "$SPAWNED_AGENT_ID" = "null" ]; } && spawn_timed_out "$SPAWN_RESULT"; then
+    LATE_AGENT=$(wmux agent list 2>/dev/null | node "$JSON_TOOL" find-spawned "$AGENT_LABEL" "$PANE_ID")
+    if [ -n "$LATE_AGENT" ]; then
+      SPAWNED_AGENT_ID=$(parse_json "$LATE_AGENT" '.agentId')
+      SPAWNED_SURFACE_ID=$(parse_json "$LATE_AGENT" '.surfaceId')
+      echo "WARNING: spawn of $AGENT_ID timed out, but wmux started it as $SPAWNED_AGENT_ID; recording that one" >&2
+    fi
+  fi
+
   if [ -z "$SPAWNED_AGENT_ID" ] || [ "$SPAWNED_AGENT_ID" = "null" ]; then
     echo "ERROR: Failed to spawn agent $AGENT_ID in pane $PANE_ID. Result: $SPAWN_RESULT" >&2
     continue
@@ -164,9 +180,13 @@ done < <(node "$JSON_TOOL" query "$ORCH_DIR/state.json" wave-cells-each "$WAVE_I
 CELL=0
 while [ "$CELL" -lt "$CELL_COUNT" ]; do
   FIRST_SURFACE="${CELL_FIRST[$CELL]:-}"
-  if [ "${CELL_MEMBERS[$CELL]:-0}" -ge 2 ] && [ -n "$FIRST_SURFACE" ] && [ "$FIRST_SURFACE" != "null" ]; then
-    FOCUS_RESULT=$(wmux focus-surface "$FIRST_SURFACE" 2>&1) \
-      || echo "WARNING: could not focus $FIRST_SURFACE: $FOCUS_RESULT" >&2
+  if [ "${CELL_MEMBERS[$CELL]:-0}" -ge 2 ]; then
+    if [ -z "$FIRST_SURFACE" ] || [ "$FIRST_SURFACE" = "null" ]; then
+      echo "WARNING: the first agent spawned in cell $CELL reported no surfaceId; not focusing that cell" >&2
+    else
+      FOCUS_RESULT=$(wmux focus-surface "$FIRST_SURFACE" 2>&1) \
+        || echo "WARNING: could not focus $FIRST_SURFACE: $FOCUS_RESULT" >&2
+    fi
   fi
   CELL=$((CELL + 1))
 done
